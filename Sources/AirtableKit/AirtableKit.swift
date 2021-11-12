@@ -177,6 +177,19 @@ public final class Airtable {
 
 public extension Airtable {
     
+    func performRequest(_ request: URLRequest?) -> AnyPublisher<[Record], AirtableError> {
+        guard let urlRequest = request else {
+            let error = AirtableError.invalidParameters(operation: #function, parameters: [request as Any])
+            return Fail(error: error).eraseToAnyPublisher()
+        }
+        
+        return URLSession.shared.dataTaskPublisher(for: urlRequest)
+            .tryMap(errorHander.mapResponse(_:))
+            .tryMap(responseDecoder.decodeRecords(data:))
+            .mapError(errorHander.mapError(_:))
+            .eraseToAnyPublisher()
+    }
+    
     func performRequest<T>(_ request: URLRequest?, decoder: @escaping (Data) throws -> T) -> AnyPublisher<T, AirtableError> {
         guard let urlRequest = request else {
             let error = AirtableError.invalidParameters(operation: #function, parameters: [request as Any])
