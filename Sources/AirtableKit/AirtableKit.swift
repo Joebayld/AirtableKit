@@ -175,7 +175,7 @@ public final class Airtable {
 
 // MARK: - Helpers
 
-extension Airtable {
+public extension Airtable {
     
     func performRequest<T>(_ request: URLRequest?, decoder: @escaping (Data) throws -> T) -> AnyPublisher<T, AirtableError> {
         guard let urlRequest = request else {
