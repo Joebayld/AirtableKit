@@ -31,6 +31,17 @@ final class ResponseDecoder {
     /// Decodes a JSON `Data` as a list of `Record`s.
     ///
     /// - Throws: `AirtableError`.
+    func decodeRecordsResponse(data: Data) throws -> AirtableResponses.Records {
+        let json = try asJSON(data: data)
+        let records = json["records"] as? [[String: Any]] ?? []
+        let offset = json["offset"] as? String
+        let recordsMapped = try records.map(_decodeRecord)
+        return .init(records: recordsMapped, offset: offset)
+    }
+    
+    /// Decodes a JSON `Data` as a list of `Record`s.
+    ///
+    /// - Throws: `AirtableError`.
     func decodeRecords(data: Data) throws -> [Record] {
         let json = try asJSON(data: data)
         let records = json["records"] as? [[String: Any]] ?? []

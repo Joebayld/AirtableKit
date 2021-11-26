@@ -1,10 +1,10 @@
-// swift-tools-version:5.2
+// swift-tools-version:5.5.0
 
 import PackageDescription
 
 let package = Package(
     name: "AirtableKit",
-    platforms: [.macOS(.v10_15), .iOS(.v13)],
+    platforms: [.macOS(.v12), .iOS(.v15)],
     products: [
         .library(
             name: "AirtableKit",
@@ -21,6 +21,7 @@ let package = Package(
             dependencies: []),
         .testTarget(
             name: "AirtableKitTests",
-            dependencies: ["AirtableKit", "Quick", "Nimble", .product(name: "OHHTTPStubsSwift", package: "OHHTTPStubs")]),
+            dependencies: ["AirtableKit", "Quick", "Nimble", .product(name: "OHHTTPStubsSwift", package: "OHHTTPStubs")],
+            resources: [.copy("mocks")]),
     ]
 )

@@ -36,12 +36,36 @@ public final class Airtable {
     ///
     /// - Parameters:
     ///   - tableName: Name of the table to list records from.
-    ///   - fields: Names of the fields that should be included in the response.
-    public func list(tableName: String, fields: [String] = []) -> AnyPublisher<[Record], AirtableError> {
-        let queryItems = fields.isEmpty ? nil : fields.map { URLQueryItem(name: "fields[]", value: $0) }
+    ///   - fields: Only data for fields whose names are in this list will be included in the result. If you don't need every field, you can use this parameter to reduce the amount of data transferred.
+    ///   - maxRecords: The maximum total number of records that will be returned in your requests.
+    ///   - pageSize: The number of records returned in each request. Must be less than or equal to 100.
+    ///   - offset: The starting point for the current page.
+    ///
+    /// - Returns: Array of `Record`s
+    public func list(tableName: String, fields: [String] = [], maxRecords: Int = 100, pageSize: Int = 100, offset: String? = nil) async throws -> [Record] {
+        var queryItems: [URLQueryItem] = []
+        queryItems.append(contentsOf: fields.map { URLQueryItem(name: "fields[]", value: $0) })
+        queryItems.append(URLQueryItem(name: "maxRecords", value: "\(maxRecords)"))
+        queryItems.append(URLQueryItem(name: "pageSize", value: "\(pageSize)"))
+        if let offset = offset {
+            queryItems.append(URLQueryItem(name: "offset", value: offset))
+        }
+        
         let request = buildRequest(method: "GET", path: tableName, queryItems: queryItems)
         
-        return performRequest(request, decoder: responseDecoder.decodeRecords(data:))
+        var results = [Record]()
+        
+        // Get the first set of records (up to 100)
+        let response = try await performRequest(request, decoder: responseDecoder.decodeRecordsResponse(data:))
+        results.append(contentsOf: response.records)
+        
+        // If there's an offset, start gathering
+        if let offset = response.offset {
+            let nextResults = try await list(tableName: tableName, fields: fields, maxRecords: maxRecords, pageSize: pageSize, offset: offset)
+            results.append(contentsOf: nextResults)
+        }
+        
+        return results
     }
     
     /// Gets a single record in a table.
@@ -49,9 +73,9 @@ public final class Airtable {
     /// - Parameters:
     ///   - tableName: Name of the table where the record is.
     ///   - recordID: The ID of the record to be fetched.
-    public func get(tableName: String, recordID: String) -> AnyPublisher<Record, AirtableError> {
+    public func get(tableName: String, recordID: String) async throws -> Record {
         let request = buildRequest(method: "GET", path: "\(tableName)/\(recordID)")
-        return performRequest(request, decoder: responseDecoder.decodeRecord(data:))
+        return try await performRequest(request, decoder: responseDecoder.decodeRecord(data:))
     }
     
     // MARK: - Add records to a table
@@ -61,14 +85,14 @@ public final class Airtable {
     /// - Parameters:
     ///   - tableName: Name of the table where the record is.
     ///   - record: The record to be created. The record should have `id == nil`.
-    public func create(tableName: String, record: Record) -> AnyPublisher<Record, AirtableError> {
+    public func create(tableName: String, record: Record) async throws -> Record {
         let request = buildRequest(
             method: "POST",
             path: tableName,
             payload: requestEncoder.encodeRecord(record, shouldAddID: false)
         )
         
-        return performRequest(request, decoder: responseDecoder.decodeRecord(data:))
+        return try await performRequest(request, decoder: responseDecoder.decodeRecord(data:))
     }
     
     /// Creates multiple records on a table.
@@ -76,17 +100,19 @@ public final class Airtable {
     /// - Parameters:
     ///   - tableName: Name  of the table where the record is.
     ///   - records: The records to be created. All records should have `id == nil`.
-    public func create(tableName: String, records: [Record]) -> AnyPublisher<[Record], AirtableError> {
-        let batches: [URLRequest?] = records.chunked(by: Self.batchLimit)
+    public func create(tableName: String, records: [Record]) async throws -> [Record] {
+        let batches = records.chunked(by: Self.batchLimit)
             .map { requestEncoder.encodeRecords($0, shouldAddID: false) }
-            .map { buildRequest(method: "POST", path: tableName, payload: $0) }
+            .compactMap { buildRequest(method: "POST", path: tableName, payload: $0) }
         
-        return Publishers.Sequence(sequence: batches)
-            .flatMap { request in
-                self.performRequest(request, decoder: self.responseDecoder.decodeRecords(data:))
-            }
-            .reduce([Record](), +)
-            .eraseToAnyPublisher()
+        var results = [Record]()
+
+        for request in batches {
+            let response = try await performRequest(request, decoder: self.responseDecoder.decodeRecords(data:))
+            results.append(contentsOf: response)
+        }
+        
+        return results
     }
     
     // MARK: - Update records on a table
@@ -100,10 +126,9 @@ public final class Airtable {
     ///   - tableName: Name of the table where the record is.
     ///   - record: The record to be updated. The `id` property **must not** be `nil`.
     ///   - replacesEntireRecord: Indicates whether the operation should replace the entire record or just updates the appropriate fields
-    public func update(tableName: String, record: Record, replacesEntireRecord: Bool = false) -> AnyPublisher<Record, AirtableError> {
+    public func update(tableName: String, record: Record, replacesEntireRecord: Bool = false) async throws -> Record {
         guard let recordID = record.id else {
-            let error = AirtableError.invalidParameters(operation: #function, parameters: [tableName, record])
-            return Fail<Record, AirtableError>(error: error).eraseToAnyPublisher()
+            throw AirtableError.invalidParameters(operation: #function, parameters: [tableName, record])
         }
         
         let request = buildRequest(
@@ -112,7 +137,7 @@ public final class Airtable {
             payload: requestEncoder.encodeRecord(record, shouldAddID: false)
         )
         
-        return performRequest(request, decoder: responseDecoder.decodeRecord(data:))
+        return try await performRequest(request, decoder: responseDecoder.decodeRecord(data:))
     }
     
     /// Updates multiple records.
@@ -124,20 +149,22 @@ public final class Airtable {
     ///   - tableName: Name of the table where the record is.
     ///   - records: The records to be updated.
     ///   - replacesEntireRecord: Indicates whether the operation should replace the entire record or just update the appropriate fields.
-    public func update(tableName: String, records: [Record], replacesEntireRecords: Bool = false) -> AnyPublisher<[Record], AirtableError> {
+    public func update(tableName: String, records: [Record], replacesEntireRecords: Bool = false) async throws -> [Record] {
         let method = replacesEntireRecords ? "PUT" : "PATCH"
         
-        let batches: [URLRequest?] = records
+        let batches: [URLRequest] = records
             .chunked(by: Self.batchLimit)
             .map { requestEncoder.encodeRecords($0, shouldAddID: true) }
-            .map { buildRequest(method: method, path: tableName, payload: $0) }
+            .compactMap { buildRequest(method: method, path: tableName, payload: $0) }
         
-        return Publishers.Sequence(sequence: batches)
-            .flatMap { request in
-                self.performRequest(request, decoder: self.responseDecoder.decodeRecords(data:))
-            }
-            .reduce([Record](), +)
-            .eraseToAnyPublisher()
+        var results = [Record]()
+
+        for request in batches {
+            let response = try await performRequest(request, decoder: self.responseDecoder.decodeRecords(data:))
+            results.append(contentsOf: response)
+        }
+        
+        return results
     }
     
     // MARK: - Detele records from a table
@@ -148,9 +175,9 @@ public final class Airtable {
     ///   - tableName: Name of the table where the record is
     ///   - recordID: The id of the record to delete.
     /// - Returns: A publisher with either the record which was deleted or an error
-    public func delete(tableName: String, recordID: String) -> AnyPublisher<Record, AirtableError> {
+    public func delete(tableName: String, recordID: String) async throws -> Record {
         let request = buildRequest(method: "DELETE", path: "\(tableName)/\(recordID)")
-        return performRequest(request, decoder: responseDecoder.decodeDeleteResponse(data:))
+        return try await performRequest(request, decoder: responseDecoder.decodeDeleteResponse(data:))
     }
     
     /// Deletes multiple records by their ID.
@@ -158,49 +185,40 @@ public final class Airtable {
     /// - Parameters:
     ///   - tableName: Name of the table where the records are.
     ///   - recordIDs: IDs of the records to be deleted.
-    public func delete(tableName: String, recordIDs: [String]) -> AnyPublisher<[Record], AirtableError> {
+    public func delete(tableName: String, recordIDs: [String]) async throws -> [Record] {
         let batches = recordIDs.map { URLQueryItem(name: "records[]", value: $0) }
             .chunked(by: Self.batchLimit)
             .map { buildRequest(method: "DELETE", path: tableName, queryItems: $0) }
+
+        var results = [Record]()
+
+        for request in batches {
+            let response = try await performRequest(request, decoder: self.responseDecoder.decodeBatchDeleteResponse(data:))
+            results.append(contentsOf: response)
+        }
         
-        return Publishers.Sequence(sequence: batches)
-            .flatMap { request in
-                self.performRequest(request, decoder: self.responseDecoder.decodeBatchDeleteResponse(data:))
-            }
-            .reduce([Record](), +)
-            .eraseToAnyPublisher()
+        return results
     }
     
 }
 
 // MARK: - Helpers
 
-public extension Airtable {
-    
-    func performRequest(_ request: URLRequest?) -> AnyPublisher<[Record], AirtableError> {
+extension Airtable {
+
+    func performRequest<T>(_ request: URLRequest?, decoder: @escaping (Data) throws -> T) async throws -> T {
         guard let urlRequest = request else {
             let error = AirtableError.invalidParameters(operation: #function, parameters: [request as Any])
-            return Fail(error: error).eraseToAnyPublisher()
+            throw error
         }
         
-        return URLSession.shared.dataTaskPublisher(for: urlRequest)
-            .tryMap(errorHander.mapResponse(_:))
-            .tryMap(responseDecoder.decodeRecords(data:))
-            .mapError(errorHander.mapError(_:))
-            .eraseToAnyPublisher()
-    }
-    
-    func performRequest<T>(_ request: URLRequest?, decoder: @escaping (Data) throws -> T) -> AnyPublisher<T, AirtableError> {
-        guard let urlRequest = request else {
-            let error = AirtableError.invalidParameters(operation: #function, parameters: [request as Any])
-            return Fail(error: error).eraseToAnyPublisher()
+        do {
+            let response = try await URLSession.shared.data(for: urlRequest)
+            let data = try errorHander.mapResponse(response)
+            return try decoder(data)
+        } catch {
+            throw errorHander.mapError(error)
         }
-        
-        return URLSession.shared.dataTaskPublisher(for: urlRequest)
-            .tryMap(errorHander.mapResponse(_:))
-            .tryMap(decoder)
-            .mapError(errorHander.mapError(_:))
-            .eraseToAnyPublisher()
     }
     
     func buildRequest(method: String, path: String, queryItems: [URLQueryItem]? = nil, payload: [String: Any]? = nil) -> URLRequest? {
