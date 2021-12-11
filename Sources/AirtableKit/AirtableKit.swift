@@ -42,13 +42,16 @@ public final class Airtable {
     ///   - offset: The starting point for the current page.
     ///
     /// - Returns: Array of `Record`s
-    public func list(tableName: String, fields: [String] = [], maxRecords: Int = 100, pageSize: Int = 100, offset: String? = nil) async throws -> [Record] {
+    public func list(tableName: String, fields: [String] = [], formula: String? = nil, maxRecords: Int = 100, pageSize: Int = 100, offset: String? = nil) async throws -> [Record] {
         var queryItems: [URLQueryItem] = []
         queryItems.append(contentsOf: fields.map { URLQueryItem(name: "fields[]", value: $0) })
         queryItems.append(URLQueryItem(name: "maxRecords", value: "\(maxRecords)"))
         queryItems.append(URLQueryItem(name: "pageSize", value: "\(pageSize)"))
         if let offset = offset {
             queryItems.append(URLQueryItem(name: "offset", value: offset))
+        }
+        if let formula = formula {
+            queryItems.append(URLQueryItem(name: "filterByFormula", value: formula))
         }
         
         let request = buildRequest(method: "GET", path: tableName, queryItems: queryItems)
