@@ -4,7 +4,11 @@ import PackageDescription
 
 let package = Package(
     name: "AirtableKit",
-    platforms: [.macOS(.v12), .iOS(.v15), .tvOS(.v15)],
+    platforms: [
+        .iOS(.v13),
+        .macOS(.v10_15),
+        .tvOS(.v13)
+    ],
     products: [
         .library(
             name: "AirtableKit",
